@@ -248,12 +248,17 @@ enum DeviceFilter: String, CaseIterable, Identifiable {
         case .switches:
             return type.contains("switch") || type.contains("pushbutton")
         case .sensors:
+            // All sensors including temperature and humidity
             return type.contains("sensor") || type.contains("analog") || 
-                   type.contains("meter") || type.contains("infoonly")
-        case .climate:
-            return type.contains("room") || type.contains("controller") ||
+                   type.contains("meter") || type.contains("infoonly") ||
                    name.contains("temp") || name.contains("humid") ||
-                   type.contains("heating") || type.contains("ventilation")
+                   name.contains("feuchte") || name.contains("temperature") ||
+                   name.contains("humidity")
+        case .climate:
+            // Only actual climate CONTROLLERS (thermostats, HVAC), not sensors
+            return type.contains("iroomcontroller") || type.contains("i-roomcontroller") ||
+                   type.contains("heating") || type.contains("ventilation") ||
+                   type.contains("climate") || type.contains("thermostat")
         case .blinds:
             return type.contains("jalousie") || type.contains("blind") ||
                    type.contains("gate") || type.contains("window")

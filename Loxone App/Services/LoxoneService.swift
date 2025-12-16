@@ -333,29 +333,23 @@ final class LoxoneService: ObservableObject {
         
         print("🏠 [LoxoneService] Total UUIDs to fetch: \(uuidsToFetch.count)")
         
-        // Fetch states in smaller batches with longer delays to avoid overwhelming the server
-        // The Miniserver has connection limits and will reset connections if overwhelmed
+        // Fetch states VERY slowly to avoid overwhelming the Miniserver
+        // The Miniserver has strict connection limits and will reset connections if overwhelmed
         let allUUIDs = Array(uuidsToFetch)
-        let batchSize = 3  // Reduced from 10 to 3
-        let delayBetweenBatches: UInt64 = 50_000_000  // 50ms between batches
+        let batchSize = 1  // Only 1 at a time to avoid connection resets
+        let delayBetweenRequests: UInt64 = 100_000_000  // 100ms between each request
         
-        for batch in stride(from: 0, to: allUUIDs.count, by: batchSize) {
-            let endIndex = min(batch + batchSize, allUUIDs.count)
-            let batchUUIDs = Array(allUUIDs[batch..<endIndex])
+        for (index, uuid) in allUUIDs.enumerated() {
+            await fetchStateValue(uuid)
             
-            // Fetch sequentially within each batch to avoid connection resets
-            for uuid in batchUUIDs {
-                await fetchStateValue(uuid)
+            // Delay between requests (except for the last one)
+            if index < allUUIDs.count - 1 {
+                try? await Task.sleep(nanoseconds: delayBetweenRequests)
             }
             
-            // Delay between batches
-            if endIndex < allUUIDs.count {
-                try? await Task.sleep(nanoseconds: delayBetweenBatches)
-            }
-            
-            // Progress indicator every 100 UUIDs
-            if batch % 100 == 0 && batch > 0 {
-                print("🏠 [LoxoneService] Progress: \(batch)/\(allUUIDs.count) states fetched")
+            // Progress indicator every 50 UUIDs
+            if (index + 1) % 50 == 0 {
+                print("🏠 [LoxoneService] Progress: \(index + 1)/\(allUUIDs.count) states fetched")
             }
         }
         
@@ -569,24 +563,12 @@ final class LoxoneService: ObservableObject {
         let controls = getControls(for: roomUUID)
         print("🔄 [LoxoneService] Fetching states for room \(roomUUID) - \(controls.count) controls")
         
-        // Fetch all states in parallel with a reasonable batch size
-        let batchSize = 10
-        for batch in stride(from: 0, to: controls.count, by: batchSize) {
-            let endIndex = min(batch + batchSize, controls.count)
-            let batchControls = Array(controls[batch..<endIndex])
-            
-            await withTaskGroup(of: Void.self) { group in
-                for control in batchControls {
-                    group.addTask {
-                        await self.fetchControlState(control.uuid)
-                    }
-                }
-            }
-            
-            // Small delay between batches to avoid overwhelming the server
-            if endIndex < controls.count {
-                try? await Task.sleep(nanoseconds: 20_000_000) // 20ms
-            }
+        // Fetch states SEQUENTIALLY to avoid overwhelming the Miniserver
+        // The Miniserver has strict connection limits
+        for control in controls {
+            await fetchControlState(control.uuid)
+            // Small delay between each control to avoid connection resets
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
         }
         
         print("✅ [LoxoneService] Finished fetching states for room \(roomUUID)")
@@ -630,17 +612,82 @@ final class LoxoneService: ObservableObject {
         
         do {
             let (data, _) = try await makeRequest(request)
+            
+            // Try to decode as LoxoneCommandResponse
             if let json = try? JSONDecoder().decode(LoxoneCommandResponse.self, from: data),
                let value = json.LL.value?.doubleValue {
                 print("📊 [LoxoneService] State fetched for \(uuid): \(value)")
                 stateStore.update(uuid: uuid, value: value)
-            } else {
-                print("⚠️ [LoxoneService] Failed to decode state for \(uuid)")
+                return
             }
+            
+            // If that fails, try to parse as raw JSON to see what we got
+            if let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Check if this is a valid response (Code 200) or an error (Code 404)
+                if let ll = jsonObject["LL"] as? [String: Any],
+                   let code = ll["Code"] as? Int {
+                    
+                    // Skip 404 errors (UUID doesn't exist)
+                    if code == 404 {
+                        return
+                    }
+                    
+                    // For Code 200, try to extract the value
+                    if code == 200 {
+                        // Try as Double first
+                        if let value = ll["value"] as? Double {
+                            print("📊 [LoxoneService] State fetched for \(uuid): \(value)")
+                            stateStore.update(uuid: uuid, value: value)
+                            return
+                        }
+                        
+                        // Try as String (for sensors with units like "38%" or "23.1°")
+                        if let valueString = ll["value"] as? String, !valueString.isEmpty {
+                            // Extract numeric value from formatted string
+                            // Examples: "38%", "23.1°", "22.0°", "0W/m²", "4km/h", "1019hPa"
+                            let numericValue = extractNumericValue(from: valueString)
+                            if let value = numericValue {
+                                print("📊 [LoxoneService] State fetched for \(uuid): \(value) (from string: \"\(valueString)\")")
+                                stateStore.update(uuid: uuid, value: value)
+                                return
+                            } else {
+                                print("⚠️ [LoxoneService] Could not extract numeric value from: \"\(valueString)\" for \(uuid)")
+                            }
+                        }
+                    }
+                }
+                
+                print("⚠️ [LoxoneService] Failed to decode state for \(uuid), raw response: \(jsonObject)")
+            } else {
+                // Log the raw response as string for debugging
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("⚠️ [LoxoneService] Failed to decode state for \(uuid), raw string: \(responseString.prefix(200))")
+                }
+            }
+            
         } catch {
             // Log failures for debugging
             print("⚠️ [LoxoneService] Error fetching state for \(uuid): \(error.localizedDescription)")
         }
+    }
+    
+    /// Extract numeric value from formatted string (e.g., "38%" -> 38.0, "23.1°" -> 23.1)
+    private func extractNumericValue(from string: String) -> Double? {
+        // Keep only numeric characters, decimal point, minus sign
+        // Create a character set of what we want to KEEP
+        let allowedCharacters = CharacterSet(charactersIn: "0123456789.,-")
+        
+        // Filter the string to keep only allowed characters
+        let numericString = string.unicodeScalars
+            .filter { allowedCharacters.contains($0) }
+            .map { String($0) }
+            .joined()
+        
+        // Handle European decimal format (comma as decimal separator)
+        let normalizedString = numericString.replacingOccurrences(of: ",", with: ".")
+        
+        // Convert to Double
+        return Double(normalizedString)
     }
     
     // MARK: - Data Access
@@ -667,7 +714,7 @@ final class LoxoneService: ObservableObject {
             return []
         }
         
-        let roomControls = controls.compactMap { uuid, control in
+        let roomControls: [LoxoneControl] = controls.compactMap { (uuid: String, control: LoxoneControl) -> LoxoneControl? in
             guard control.room == roomUUID else { return nil }
             
             // Create a new control with the UUID properly set from the dictionary key
@@ -696,7 +743,7 @@ final class LoxoneService: ObservableObject {
     /// Get all controls
     func getAllControls() -> [LoxoneControl] {
         guard let controls = structure?.controls else { return [] }
-        return controls.map { uuid, control in
+        return controls.map { (uuid: String, control: LoxoneControl) -> LoxoneControl in
             LoxoneControl(
                 uuid: uuid,
                 name: control.name,

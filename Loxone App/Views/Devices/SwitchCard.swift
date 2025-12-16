@@ -16,13 +16,19 @@ struct SwitchCard: View {
     
     private var state: DeviceState? {
         // First try to get state from the control's "active" state UUID
-        if let activeStateUUID = control.states?["active"]?.uuidString,
-           let activeState = stateStore.state(for: activeStateUUID) {
-            return activeState
+        if let activeStateUUID = control.states?["active"]?.uuidString {
+            let activeState = stateStore.state(for: activeStateUUID)
+            print("🔘 [SwitchCard] \(control.name) - active state UUID: \(activeStateUUID), value: \(activeState?.value ?? -1)")
+            if activeState != nil {
+                return activeState
+            }
         }
         
         // Fallback to the control's main UUID
-        return stateStore.state(for: control.uuid)
+        let mainState = stateStore.state(for: control.uuid)
+        print("🔘 [SwitchCard] \(control.name) - main UUID: \(control.uuid), value: \(mainState?.value ?? -1)")
+        print("🔘 [SwitchCard] \(control.name) - available states: \(control.states?.keys.joined(separator: ", ") ?? "none")")
+        return mainState
     }
     
     private var isOn: Bool {

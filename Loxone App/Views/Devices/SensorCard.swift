@@ -42,7 +42,12 @@ struct SensorCard: View {
     }
     
     private var hasValue: Bool {
-        state != nil
+        if let value = state?.value {
+            print("🌡️ [SensorCard] \(control.name) - hasValue: true, value: \(value)")
+            return true
+        }
+        print("🌡️ [SensorCard] \(control.name) - hasValue: false, state: \(state == nil ? "nil" : "exists but no value")")
+        return false
     }
     
     var body: some View {

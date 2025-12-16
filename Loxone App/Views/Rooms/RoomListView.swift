@@ -13,7 +13,6 @@ struct RoomListView: View {
     @Binding var selectedRoom: LoxoneRoom?
     @ObservedObject var viewModel: LoxoneViewModel
     
-    @State private var showingRoomAssignment = false
     @State private var searchText = ""
     
     var body: some View {
@@ -47,22 +46,6 @@ struct RoomListView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if let floor = floor, !floor.isUnassigned {
-                    Button {
-                        showingRoomAssignment = true
-                    } label: {
-                        Label("Assign Rooms", systemImage: "square.and.pencil")
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $showingRoomAssignment) {
-            if let floor = floor {
-                RoomAssignmentView(floor: floor, viewModel: viewModel)
             }
         }
     }
@@ -110,15 +93,6 @@ struct RoomListView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                
-                if !floor.isUnassigned {
-                    Button {
-                        showingRoomAssignment = true
-                    } label: {
-                        Label("Assign Rooms", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
             }
         }
         .frame(maxWidth: .infinity)
